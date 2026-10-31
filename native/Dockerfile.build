@@ -15,5 +15,15 @@ RUN x86_64-w64-mingw32-gcc -shared -O2 -Wall -Wextra -Werror \
     src/buffer.c src/hook.c src/trampoline.c src/hde/hde64.c \
     -static-libgcc -lshell32 -luser32 -lgdi32 -Wl,--no-insert-timestamp -o /out/version.dll \
     && x86_64-w64-mingw32-objdump -p /out/version.dll > /out/version-headers.txt
+FROM build AS test-build
+COPY tests/ ./host/tests/
+RUN x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
+    -Iinclude -Isrc -Ihost host/tests/network_auth_test.c \
+    src/buffer.c src/hook.c src/trampoline.c src/hde/hde64.c \
+    -static-libgcc -lshell32 -Wl,--no-insert-timestamp -o /out/network-auth-test.exe
+
+FROM scratch AS test-artifact
+COPY --from=test-build /out/network-auth-test.exe /out/MinHook-LICENSE.txt /
+
 FROM scratch AS artifact
 COPY --from=build /out/ /

@@ -1,8 +1,9 @@
 # Moon Sweepers server on Ubuntu
 
 This Docker path runs the owned Windows game with Wine, a small virtual display,
-and the genuine Steam GameServer API. It uses an anonymous server identity, so it
-does not need a third playing account or Steam login. The server runs with
+and the genuine Steam GameServer API. It uses anonymous login by default, with
+optional token login to a persistent server account. Neither mode consumes a
+third playing account or requires a Steam desktop session. The server runs with
 -batchmode/-nographics; players use their normal licensed Steam clients.
 
 Supported game: **Moon Sweepers 1.0.5 / Steam build 26317497**, IL2CPP metadata 108.
@@ -76,7 +77,7 @@ required. Setup saves it in .server.env with owner-only file permissions.
 MOON_ALLOWED_STEAM_IDS is optional. Leaving it empty disables the additional
 player filter. To restrict access further, set it to 1–15 distinct public
 individual SteamID64s separated by commas. Setup also accepts --steam-ids for
-this optional filter. These are player IDs, distinct from the anonymous server ID.
+this optional filter. These are player IDs, distinct from the server ID.
 
 The .server.env.example template contains all settings. MOON_SLOT selects save
 slot 1–5. MOON_BACKUP_KEEP defaults to ten confirmed shutdown archives. Neither a
@@ -98,7 +99,7 @@ locked in container/server/redist-lock.json and recorded in
 
 Status prints the current native JSON, including the real server SteamID and
 heartbeat age. Container health requires ready=true and a heartbeat no older than
-15 seconds. The SteamID may change after a restart, so read the current status
+15 seconds. With anonymous login the SteamID may change after a restart, so read the current status
 before connecting. The status report also includes `join_transport`, `game_port`,
 and `query_port` for the dedicated host.
 
@@ -127,6 +128,73 @@ connectivity to Steam services and networking relays.
 
 Valve documents the transport in [ISteamNetworkingMessages](https://partner.steamgames.com/doc/api/ISteamNetworkingMessages)
 and the separate game/query initialization settings in [SteamGameServer_Init](https://partner.steamgames.com/doc/api/steam_gameserver#SteamGameServer_Init).
+
+## Persistent server ID with a GSLT
+
+Valve's [LogOn API](https://partner.steamgames.com/doc/api/ISteamGameServer#LogOn)
+logs in to a persistent game server account. To try it for Moon Sweepers:
+
+1. Use the `feat/steam-token-login` branch; v0.1.0-alpha.2 does not include this
+   server change. From an existing checkout with your private settings and data:
+
+~~~sh
+git fetch origin
+git switch feat/steam-token-login
+~~~
+
+   Keep any local source changes before switching; do not reset or delete them.
+2. Create a server account for App ID **5335510** on
+   [Steam Game Server Account Management](https://steamcommunity.com/dev/managegameservers).
+   Steam lists the owning account's eligibility requirements there.
+3. On the NUC, edit the private `.server.env` and set `MOON_STEAM_TOKEN` to the GSLT.
+   Keep the file owner-readable only (`chmod 600 .server.env`). Keep the token on
+   the server; do not put it in chat, command-line arguments, Git, screenshots, or
+   support logs. It is separate from the shared `MOON_SERVER_PASSWORD` for players.
+4. Rebuild/recreate the container with its existing data volume:
+
+~~~sh
+docker compose --env-file .server.env -f compose.server.yaml up -d --build
+docker compose --env-file .server.env -f compose.server.yaml exec -T server /opt/moon/bin/entrypoint status
+~~~
+
+For a successful token login, verify all of:
+
+- `ready` is true and the heartbeat is fresh.
+- `steam_login_mode` is `gslt`.
+- `steam_account_type` is `3` (persistent game server).
+- `server_steam_id` is nonzero.
+
+Then restart the container twice, wait for a fresh ready state each time, and
+compare `server_steam_id`. Reuse the same valid token on one server instance.
+Only mark persistent-ID hosting verified after those IDs match and a licensed
+client can join with the password.
+
+Empty/unset `MOON_STEAM_TOKEN` keeps anonymous login (`steam_login_mode` is
+`anonymous`, account type `4`). A configured but malformed/rejected token blocks
+readiness and reports a safe error; it does not fall back to a different ID.
+Regenerating/replacing a token can require a new saved server ID.
+
+Use the updated Windows installer and launcher from this change before saving
+the persistent ID. Earlier alpha launch scripts accepted only anonymous IDs.
+Update the desktop connection once with `-Action Shortcut -ServerId NEW_SERVER_ID`
+and the usual `-GamePath`, using this branch's scripts. For an already installed
+alpha.2 client, `-Action Shortcut` also replaces its owned launcher with the new
+one; rebuilding the client DLL is unnecessary for this compatibility update.
+Fresh clients can build `native/out/version.dll` with the command in
+[native/README.md](native/README.md), then use the branch's installer. The player
+ticket/password protocol and server save paths are unchanged.
+
+Token selection and validation are regression-tested, and anonymous operation is
+covered separately. A real token for App ID 5335510 reached a fresh ready world
+in local CPU-only Docker, Steam networking authentication succeeded, and the ID
+remained unchanged across two clean container restarts. Confirm those steps on
+the NUC, then test a licensed client's password join with the persistent ID.
+
+The runtime waits for its virtual display to exit on shutdown and removes stale
+local display locks when no display server is answering. This fixes a failure
+where restarting the same container could report `Server is already active for
+display 99`. Clean restarts and recovery from seeded stale display files are
+tested separately from container recreation.
 
 ## 4. Connect the Windows clients
 
@@ -166,7 +234,7 @@ Each player launches the game through their own licensed Steam account with:
 -moon-connect SERVER_STEAMID64
 ~~~
 
-Replace SERVER_STEAMID64 with the anonymous server ID from status. Keep the
+Replace SERVER_STEAMID64 with the server ID from status. Keep the
 normal game graphics enabled on each playing client, and enter the server password
 when the module prompts. If you configured the optional allowlist, each player's
 individual SteamID must also be listed. Recreate the container after changing

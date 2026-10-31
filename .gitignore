@@ -1,5 +1,7 @@
 .env
-.server.env
+.server.env*
+!.server.env.example
+*.env
 .secrets/
 __pycache__/
 *.pyc
@@ -10,6 +12,7 @@ __pycache__/
 server-backups/
 dist/
 native/out/
+native/test-out/
 .publish/
 source/
 *.dmp

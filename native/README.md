@@ -1,14 +1,17 @@
 # Moon Sweepers native server and client module
 
 This Windows x64 `version.dll` forwards the system VERSION API and, when enabled,
-adapts the owned game to an anonymous Steam GameServer host or direct-connect
+adapts the owned game to a Steam GameServer host or direct-connect
 client. It contains our adapter code and MinHook, without game binaries, accounts,
 or copied game source. Runtime methods and fields are resolved through IL2CPP.
 
 Supported game: Moon Sweepers 1.0.5, Steam build 26317497, Unity 6000.6.0f1.
 The import and client installation tools reject a different GameAssembly hash.
 Both players still need their own Steam accounts and game licenses. The server
-uses Valve's anonymous GameServer login and consumes no playing account.
+uses Valve's anonymous GameServer login by default and consumes no playing
+account. Set `MOON_STEAM_TOKEN` for optional persistent account login with a GSLT;
+the token is never included in status or our log messages. Invalid/rejected
+configured tokens do not fall back to anonymous login.
 
 Build from the repository root with Linux Docker:
 
@@ -35,6 +38,13 @@ An empty `MOON_ALLOWED_STEAM_IDS` allows licensed players with the password; a
 nonempty value adds a player filter. Server and clients must use the same release
 (protocol v2).
 
+Persistent game server IDs use account type 3; anonymous server IDs use type 4.
+The client launcher accepts both. Status includes `steam_login_mode` and
+`steam_account_type` to verify the selected backend. Real token-backed login,
+Steam networking authentication, and ID stability across two clean restarts
+passed in local CPU-only Docker. NUC deployment and a live client connection
+using the persistent ID remain validation steps.
+
 The host defaults to save slot 1; `MOON_SLOT` or `-moon-slot` selects 1-5.
 The ordinary game save directory is retained within the persistent Wine prefix.
 The module reports a world ready only after CPU initialization has completed and
@@ -56,3 +66,16 @@ for the current multiplayer verification status.
 With no opt-in, or in processes other than MoonSweepers.exe, the DLL only forwards
 VERSION exports. Removing an owned installation disables the module. This is an
 unofficial experimental adapter and must be revalidated after a game update.
+
+## Regression checks
+
+Build the Windows test executable from the repository root:
+
+```sh
+docker build -f native/Dockerfile.build --target test-artifact --output native/test-out native
+```
+
+Run `native/test-out/network-auth-test.exe` on Windows (or with Wine). It uses mock
+Steam calls to test login selection, rejected-token behavior, identity types,
+password/ticket/license gates, disconnects, and receive/timeout bounds. It does
+not log on with a real token or launch the game. Build output is ignored by Git.

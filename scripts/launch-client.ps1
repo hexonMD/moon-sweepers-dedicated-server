@@ -15,7 +15,7 @@ try {
     $supported='14f711a6a3b1b7cd803a03f85cc6c6201c5b546ab9b90329533f5cb8ae2e7f13'
     if ((Get-FileHash -LiteralPath (Join-Path $gameDirectory 'GameAssembly.dll') -Algorithm SHA256).Hash -ne $supported) { throw 'This module supports Moon Sweepers 1.0.5, Steam build 26317497. The installed game differs.' }
     $serverId=[string]$record.server_id
-    if ($serverId -notmatch '^\d{17}$' -or (([UInt64]::Parse($serverId) -shr 52) -band 15) -ne 4) { throw 'Set the current server SteamID with the client installer before joining.' }
+    if ($serverId -notmatch '^\d{17}$' -or (([UInt64]::Parse($serverId) -shr 52) -band 15) -notin @(3,4) -or ([UInt64]::Parse($serverId) -shr 56) -ne 1 -or ([UInt64]::Parse($serverId) -band 0xffffffffL) -eq 0) { throw 'Set the current persistent or anonymous game server SteamID with the client installer before joining.' }
     if (Get-CimInstance Win32_Process -Filter "Name='MoonSweepers.exe'" | Where-Object { $_.ExecutablePath -eq $gameExe }) { throw 'Moon Sweepers is already running. Close it before joining again.' }
     $steam=(Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamExe
     if (-not $steam) { $steam=Join-Path ${env:ProgramFiles(x86)} 'Steam\steam.exe' }
