@@ -35,7 +35,7 @@ _Static_assert(sizeof(ConnectionInfo)==696&&offsetof(ConnectionInfo,reason)==180
 _Static_assert(sizeof(AuthenticationStatus)==260&&sizeof(RelayStatus)==272,"Steam status ABI");
 
 enum {MODE_OFF,MODE_SERVER,MODE_CLIENT};
-enum {CONTROL_CHANNEL=3,CONTROL_VERSION=2,MAX_PEERS=15,MAX_TICKET=2048,MAX_PASSWORD=128,CONTROL_MAGIC=0x5344534d};
+enum {CONTROL_CHANNEL=3,CONTROL_VERSION=2,MAX_PEERS=15,MAX_TICKET=2048,MAX_PASSWORD=128,MAX_LOGIN_TOKEN=256,CONTROL_MAGIC=0x5344534d};
 enum {AUTH_REQUEST=1,ROSTER=2,REJECT=3,PING=4,GOODBYE=5,WAIT_WORLD=6,PASSWORD_REJECTED=7};
 #pragma pack(push,1)
 typedef struct {uint32_t magic;uint16_t version,type;uint32_t bytes;} ControlHeader;
@@ -63,6 +63,8 @@ static void *server_api,*messages_api,*user_api;
 static int32_t server_pipe;
 static char server_name[64]="Moon Sweepers Dedicated";
 static char server_password[MAX_PASSWORD+1],client_password[MAX_PASSWORD+1];
+static char server_login_token[MAX_LOGIN_TOKEN+1];
+static bool token_configured,token_valid=true;
 static size_t server_password_length,client_password_length;
 static bool server_password_valid,client_password_ready;
 static uint64_t allowlist[MAX_PEERS];static unsigned allow_count;
@@ -97,7 +99,8 @@ static struct {
  void (__cdecl *set_product)(void *,const char *);void (__cdecl *set_description)(void *,const char *);
  void (__cdecl *set_mod)(void *,const char *);void (__cdecl *set_name)(void *,const char *);
  void (__cdecl *set_dedicated)(void *,bool);void (__cdecl *set_advertise)(void *,bool);
- void (__cdecl *set_capacity)(void *,int);void (__cdecl *logon)(void *);
+ void (__cdecl *set_capacity)(void *,int);void (__cdecl *logon_anonymous)(void *);
+ void (__cdecl *logon_token)(void *,const char *);
  bool (__cdecl *logged_on)(void *);uint64_t (__cdecl *gs_id)(void *);
  int (__cdecl *begin_auth)(void *,const void *,int,uint64_t);void (__cdecl *end_auth)(void *,uint64_t);
  int (__cdecl *has_license)(void *,uint64_t,uint32_t);
@@ -147,6 +150,8 @@ static void report(const char *text){if(logger)logger(text);}
 static void phase(const char *text){if(strcmp(net_phase,text)!=0){net_phase=text;report(text);}}
 static void env(const char *key,char *out,size_t size){DWORD n=GetEnvironmentVariableA(key,out,(DWORD)size);if(!n||n>=size)out[0]=0;}
 static uint64_t parse_id(const char *text){char *end=NULL;unsigned long long id=strtoull(text,&end,10);return end&&*end==0?id:0;}
+static unsigned account_type(uint64_t id){return (unsigned)((id>>52)&15);}
+static bool server_identity(uint64_t id){return (id>>56)==1&&(uint32_t)id!=0&&(account_type(id)==3||account_type(id)==4);}
 static bool password_size(const char *value,size_t *size){
  size_t n=0;for(;n<=MAX_PASSWORD&&value[n];n++)if((unsigned char)value[n]<32||(unsigned char)value[n]>126)return false;
  if(n<8||n>MAX_PASSWORD)return false;
@@ -190,8 +195,15 @@ static void configure(void){
   wchar_t wide[MAX_PASSWORD+2]={0};DWORD n=GetEnvironmentVariableW(L"MOON_SERVER_PASSWORD",wide,MAX_PASSWORD+2);
   if(n>=8&&n<=MAX_PASSWORD){server_password_valid=true;server_password_length=n;for(DWORD i=0;i<n;i++){if(wide[i]<32||wide[i]>126){server_password_valid=false;break;}server_password[i]=(char)wide[i];}}
   SecureZeroMemory(wide,sizeof(wide));
+  wchar_t token[MAX_LOGIN_TOKEN+2]={0};DWORD token_length=GetEnvironmentVariableW(L"MOON_STEAM_TOKEN",token,MAX_LOGIN_TOKEN+2);
+  token_configured=token_length>0;
+  if(token_configured){
+   token_valid=token_length<=MAX_LOGIN_TOKEN;
+   if(token_valid)for(DWORD i=0;i<token_length;i++){if(token[i]<33||token[i]>126){token_valid=false;break;}server_login_token[i]=(char)token[i];}
+  }
+  SecureZeroMemory(token,sizeof(token));
  }
- if(mode==MODE_CLIENT&&!server_id){mode=MODE_OFF;net_phase="invalid-server-id";}
+ if(mode==MODE_CLIENT&&!server_identity(server_id)){mode=MODE_OFF;net_phase="invalid-server-id";}
  if(game_port==query_port)ports_valid=false;
  if(mode==MODE_SERVER&&!ports_valid)net_phase="invalid-server-port";
 }
@@ -203,6 +215,7 @@ bool MoonNet_IsStopped(void){return shutdown_requested||client_stopped;}
 uint64_t MoonNet_ServerId(void){return server_id;}
 int MoonNet_GamePort(void){configure();return game_port;}
 int MoonNet_QueryPort(void){configure();return query_port;}
+const char *MoonNet_LoginMode(void){configure();return token_configured?"gslt":"anonymous";}
 const char *MoonNet_Phase(void){return net_phase;}
 unsigned MoonNet_AuthenticatedPeers(void){unsigned n=0;for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated)n++;return n;}
 void MoonNet_SetWorldReady(bool ready){world_ready=ready;}
@@ -356,6 +369,7 @@ static void handle_server_callback(CallbackMessage *message){
  transport_callback(message);
  if(message->id==101){phase("server-steam-connected");}
  else if(message->id==102||message->id==103){
+  if(message->data&&message->size>=4){int32_t result;memcpy(&result,message->data,4);char text[160];snprintf(text,sizeof(text),"Steam server %s failed/disconnected: EResult=%d",token_configured?"GSLT login":"anonymous login",result);report(text);}
   backend_ready=false;world_ready=false;
   next_backend_ready=GetTickCount64()+1000;
   for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id)drop_peer(&peers[i],"Steam server disconnected; reconnect required");
@@ -379,6 +393,10 @@ static bool __cdecl observe_callback(int32_t pipe,CallbackMessage *message){
  if(result&&message->id==163&&message->size>=8){uint32_t handle;int32_t response;memcpy(&handle,message->data,4);memcpy(&response,(uint8_t *)message->data+4,4);if(handle==client_ticket){ticket_ready=response==1;ticket_failed=response!=1;}}
  return result;
 }
+static void log_on_server(void){
+ if(token_configured){sdk.logon_token(server_api,server_login_token);phase("server-logging-on-with-gslt");}
+ else {sdk.logon_anonymous(server_api);phase("server-logging-on-anonymously");}
+}
 static bool start_server(void){
  if(shutdown_requested)return false;
  if(server_started)return true;
@@ -387,8 +405,8 @@ static bool start_server(void){
  if(!sdk.gs_init(0,0,(uint16_t)game_port,(uint16_t)query_port,2,"1.0.5")){phase("server-init-failed");return false;}
  server_api=sdk.gs();messages_api=sdk.gs_messages();if(!server_api||!messages_api){sdk.shutdown();server_api=messages_api=NULL;phase("server-interface-failed");return false;}
  sdk.set_product(server_api,"5335510");sdk.set_description(server_api,"Moon Sweepers");sdk.set_mod(server_api,"Moon Sweepers");sdk.set_name(server_api,server_name);sdk.set_dedicated(server_api,true);sdk.set_advertise(server_api,false);sdk.set_capacity(server_api,16);
- sdk.dispatch_init();server_pipe=sdk.gs_pipe();sdk.logon(server_api);sockets_api=sdk.gs_sockets();utils_api=sdk.utils();if(utils_api)sdk.init_relay(utils_api);
- server_started=true;phase("server-logging-on-anonymously");return true;
+ sdk.dispatch_init();server_pipe=sdk.gs_pipe();log_on_server();sockets_api=sdk.gs_sockets();utils_api=sdk.utils();if(utils_api)sdk.init_relay(utils_api);
+ server_started=true;return true;
 }
 static void __cdecl server_start_steam(Object *self,const Method *info){(void)self;(void)info;start_server();}
 static uint64_t __cdecl server_steam_id(const Method *info){(void)info;return server_id;}
@@ -449,7 +467,7 @@ static bool load_apis(void){
  if(!steam_module)return false;
 #define SDK(member,name) do{FARPROC p=GetProcAddress(steam_module,name);memcpy(&sdk.member,&p,sizeof(p));if(!sdk.member){report("Missing " name);return false;}}while(0)
  SDK(gs_init,"SteamInternal_GameServer_Init");SDK(gs,"SteamAPI_SteamGameServer_v015");SDK(gs_messages,"SteamAPI_SteamGameServerNetworkingMessages_SteamAPI_v002");SDK(client_messages,"SteamAPI_SteamNetworkingMessages_SteamAPI_v002");SDK(gs_sockets,"SteamAPI_SteamGameServerNetworkingSockets_SteamAPI_v012");SDK(client_sockets,"SteamAPI_SteamNetworkingSockets_SteamAPI_v012");SDK(utils,"SteamAPI_SteamNetworkingUtils_SteamAPI_v004");SDK(user,"SteamAPI_SteamUser_v023");
- SDK(set_product,"SteamAPI_ISteamGameServer_SetProduct");SDK(set_description,"SteamAPI_ISteamGameServer_SetGameDescription");SDK(set_mod,"SteamAPI_ISteamGameServer_SetModDir");SDK(set_name,"SteamAPI_ISteamGameServer_SetServerName");SDK(set_dedicated,"SteamAPI_ISteamGameServer_SetDedicatedServer");SDK(set_advertise,"SteamAPI_ISteamGameServer_SetAdvertiseServerActive");SDK(set_capacity,"SteamAPI_ISteamGameServer_SetMaxPlayerCount");SDK(logon,"SteamAPI_ISteamGameServer_LogOnAnonymous");SDK(logged_on,"SteamAPI_ISteamGameServer_BLoggedOn");SDK(gs_id,"SteamAPI_ISteamGameServer_GetSteamID");SDK(begin_auth,"SteamAPI_ISteamGameServer_BeginAuthSession");SDK(end_auth,"SteamAPI_ISteamGameServer_EndAuthSession");SDK(has_license,"SteamAPI_ISteamGameServer_UserHasLicenseForApp");SDK(init_auth,"SteamAPI_ISteamNetworkingSockets_InitAuthentication");SDK(shutdown,"SteamGameServer_Shutdown");
+ SDK(set_product,"SteamAPI_ISteamGameServer_SetProduct");SDK(set_description,"SteamAPI_ISteamGameServer_SetGameDescription");SDK(set_mod,"SteamAPI_ISteamGameServer_SetModDir");SDK(set_name,"SteamAPI_ISteamGameServer_SetServerName");SDK(set_dedicated,"SteamAPI_ISteamGameServer_SetDedicatedServer");SDK(set_advertise,"SteamAPI_ISteamGameServer_SetAdvertiseServerActive");SDK(set_capacity,"SteamAPI_ISteamGameServer_SetMaxPlayerCount");SDK(logon_anonymous,"SteamAPI_ISteamGameServer_LogOnAnonymous");SDK(logon_token,"SteamAPI_ISteamGameServer_LogOn");SDK(logged_on,"SteamAPI_ISteamGameServer_BLoggedOn");SDK(gs_id,"SteamAPI_ISteamGameServer_GetSteamID");SDK(begin_auth,"SteamAPI_ISteamGameServer_BeginAuthSession");SDK(end_auth,"SteamAPI_ISteamGameServer_EndAuthSession");SDK(has_license,"SteamAPI_ISteamGameServer_UserHasLicenseForApp");SDK(init_auth,"SteamAPI_ISteamNetworkingSockets_InitAuthentication");SDK(shutdown,"SteamGameServer_Shutdown");
  SDK(dispatch_init,"SteamAPI_ManualDispatch_Init");SDK(gs_pipe,"SteamGameServer_GetHSteamPipe");SDK(run_frame,"SteamAPI_ManualDispatch_RunFrame");SDK(next_callback,"SteamAPI_ManualDispatch_GetNextCallback");SDK(free_callback,"SteamAPI_ManualDispatch_FreeLastCallback");
  SDK(auth_status,"SteamAPI_ISteamNetworkingSockets_GetAuthenticationStatus");SDK(init_relay,"SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess");SDK(relay_status,"SteamAPI_ISteamNetworkingUtils_GetRelayNetworkStatus");
  SDK(send,"SteamAPI_ISteamNetworkingMessages_SendMessageToUser");SDK(receive,"SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel");SDK(accept,"SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser");SDK(close,"SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser");SDK(close_channel,"SteamAPI_ISteamNetworkingMessages_CloseChannelWithUser");SDK(session_info,"SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo");SDK(release,"SteamAPI_SteamNetworkingMessage_t_Release");SDK(user_id,"SteamAPI_ISteamUser_GetSteamID");SDK(auth_ticket,"SteamAPI_ISteamUser_GetAuthSessionTicket");SDK(cancel_ticket,"SteamAPI_ISteamUser_CancelAuthTicket");
@@ -486,6 +504,7 @@ static bool resolve_marshalling(void){
 }
 bool MoonNet_Install(const void *image,void (*log_line)(const char *)){
  configure();logger=log_line;if(mode==MODE_OFF)return true;if(installed)return true;game_image=image;
+ if(mode==MODE_SERVER&&!token_valid){report("MOON_STEAM_TOKEN must be empty or at most 256 non-whitespace ASCII characters");phase("server-token-invalid");return false;}
  if(mode==MODE_SERVER&&!ports_valid){report("MOON_GAME_PORT and MOON_QUERY_PORT must be distinct numbers from 1024 to 65535");phase("server-port-invalid");return false;}
  if(mode==MODE_SERVER&&!server_password_valid){report("MOON_SERVER_PASSWORD is required: use 8..128 printable ASCII characters");phase("server-password-invalid");return false;}
  if(!load_apis()||!resolve_game()||(mode==MODE_SERVER&&!resolve_marshalling())){phase("network-install-failed");return false;}
@@ -516,7 +535,10 @@ static void tick_server(void){
  while(sdk.next_callback(server_pipe,&message)){handle_server_callback(&message);sdk.free_callback(server_pipe);}
  if(GetTickCount64()>=next_backend_ready&&sdk.logged_on(server_api)){
   uint64_t id=sdk.gs_id(server_api);
-  if(id&&!backend_ready){server_id=id;self_id=id;backend_ready=true;if(sockets_api){int result=sdk.init_auth(sockets_api);char text[128];snprintf(text,sizeof(text),"network: InitAuthentication result=%d",result);report(text);}uint8_t yes=1;void *a[]={&id};call(game.set_steam_id,NULL,a);Object *name=il.new_string(server_name);void *b[]={name};call(game.set_persona,NULL,b);void *c[]={&yes};call(game.set_initialized,NULL,c);publish_members();if(!call(game.crew_instance,NULL,NULL))call(game.crew_create,NULL,NULL);char text[128];snprintf(text,sizeof(text),"Anonymous server SteamID: %llu",(unsigned long long)id);report(text);phase("server-authenticated-anonymous");}
+  if(id&&!backend_ready){
+   if(!server_identity(id)||account_type(id)!=(token_configured?3u:4u)){phase("server-identity-type-mismatch");return;}
+   server_id=id;self_id=id;backend_ready=true;if(sockets_api){int result=sdk.init_auth(sockets_api);char text[128];snprintf(text,sizeof(text),"network: InitAuthentication result=%d",result);report(text);}uint8_t yes=1;void *a[]={&id};call(game.set_steam_id,NULL,a);Object *name=il.new_string(server_name);void *b[]={name};call(game.set_persona,NULL,b);void *c[]={&yes};call(game.set_initialized,NULL,c);publish_members();if(!call(game.crew_instance,NULL,NULL))call(game.crew_create,NULL,NULL);char text[128];snprintf(text,sizeof(text),"%s server SteamID: %llu",token_configured?"Persistent":"Anonymous",(unsigned long long)id);report(text);phase(token_configured?"server-authenticated-gslt":"server-authenticated-anonymous");
+  }
  }
  transport_diagnostic();receive_control();ULONGLONG now=GetTickCount64();
  if(now>=next_roster){next_roster=now+5000;broadcast_roster();}
@@ -558,6 +580,7 @@ void MoonNet_Shutdown(void){
  backend_ready=false;world_ready=false;
  client_connected=false;
  SecureZeroMemory(client_password,sizeof(client_password));SecureZeroMemory(ticket_bytes,sizeof(ticket_bytes));client_password_ready=false;
+ SecureZeroMemory(server_login_token,sizeof(server_login_token));
  memset(peers,0,sizeof(peers));
  if(mode==MODE_SERVER&&game.set_initialized){uint8_t no=0;void *args[]={&no};call(game.set_initialized,NULL,args);}
 }

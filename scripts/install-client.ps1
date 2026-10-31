@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath $gameExe -PathType Leaf)) { throw 'Select the f
 $record=$null
 if (Test-Path -LiteralPath $recordPath) { $record=Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json }
 if ($Action -in @('Install','Uninstall') -and (Get-CimInstance Win32_Process -Filter "Name='MoonSweepers.exe'" | Where-Object { $_.ExecutablePath -eq $gameExe })) { throw 'Close Moon Sweepers before changing the client module.' }
-if ($ServerId -and ($ServerId -notmatch '^\d{17}$' -or (([UInt64]::Parse($ServerId) -shr 52) -band 15) -ne 4)) { throw 'ServerId must be the anonymous server SteamID shown by the server status command.' }
+if ($ServerId -and ($ServerId -notmatch '^\d{17}$' -or (([UInt64]::Parse($ServerId) -shr 52) -band 15) -notin @(3,4) -or ([UInt64]::Parse($ServerId) -shr 56) -ne 1 -or ([UInt64]::Parse($ServerId) -band 0xffffffffL) -eq 0)) { throw 'ServerId must be the persistent or anonymous game server SteamID shown by the server status command.' }
 function Get-RecordValue([string]$Name) {
     if ($record -and $record.PSObject.Properties[$Name]) { return $record.PSObject.Properties[$Name].Value }
     return $null

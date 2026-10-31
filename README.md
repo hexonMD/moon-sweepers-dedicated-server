@@ -1,7 +1,7 @@
 # Moon Sweepers dedicated server for Ubuntu
 
 An unofficial Docker server for Ubuntu on Intel/AMD. The host runs without a GPU,
-uses a genuine anonymous Steam GameServer identity, and keeps the world in a
+uses Steam GameServer login (anonymous by default), and keeps the world in a
 persistent volume. You and your friend use your two existing licensed Steam
 accounts. A third playing account and a Steam desktop on the server are unnecessary.
 
@@ -30,7 +30,7 @@ docker compose --env-file .server.env -f compose.server.yaml exec -T server /opt
 ```
 
 Setup asks for the game folder, generates a join password, and prints it plainly.
-Status prints the current anonymous `server_steam_id`. Read the complete [Ubuntu installation guide](SERVER.md)
+Status prints the current `server_steam_id`. Read the complete [Ubuntu installation guide](SERVER.md)
 for the Windows-to-Ubuntu copy command, settings, backups, and troubleshooting.
 
 No Steam username or password is used. The image contains Wine and our module;
@@ -68,6 +68,27 @@ IP-based join endpoint. The default Compose file publishes no inbound ports;
 the adapter uses Steam P2P/relay networking. Forwarding a port on your router
 does not change the connection method. See [networking details](SERVER.md#ports-and-connection-method).
 
+## Keep the server ID stable
+
+This feature is available on the `feat/steam-token-login` test branch. The
+published v0.1.0-alpha.2 ZIP predates token support; follow the branch's
+[NUC test instructions](SERVER.md#persistent-server-id-with-a-gslt).
+
+Set optional `MOON_STEAM_TOKEN` in the NUC's private `.server.env` to a Steam Game
+Server Login Token (GSLT) created for App ID **5335510**. A configured token uses
+Valve's persistent game server account login. Empty or unset uses anonymous login.
+The server reports `steam_login_mode` and `steam_account_type` in status; the token
+itself is never included in that report or our log messages.
+
+Use the same valid token for that server. Check its ID across two restarts before
+relying on it; a rejected configured token does not silently fall back to an
+anonymous ID. Upgrade the Windows launch scripts too: they now accept persistent
+and anonymous server IDs. The initial switch to token login changes the saved ID
+once. Player tickets, join passwords, saves, and the wire protocol stay the same.
+
+See [GSLT setup and NUC verification](SERVER.md#persistent-server-id-with-a-gslt).
+Real token-backed login and restart stability for this app still need NUC testing.
+
 ## Connect each Windows player
 
 Download the client/server ZIP from [GitHub Releases](https://github.com/hexonMD/moon-sweepers-dedicated-server/releases).
@@ -82,7 +103,8 @@ Alternatively, install the DLL with the script and set this game's Steam launch
 options to `-moon-connect YOUR_SERVER_STEAM_ID`. Each player remains signed into
 their own normal Steam client. Enter the server password in the connection prompt.
 Complete the game's first-time new-hire intro when
-it appears. The server ID can change on restart; use the current one.
+it appears. With anonymous login the server ID can change on restart; use the
+current one. GSLT login is intended to keep the same persistent account ID.
 
 The installer creates **Join Moon Sweepers** on your Windows desktop, using the
 game's icon. After that, double-click it and enter the server password to join.

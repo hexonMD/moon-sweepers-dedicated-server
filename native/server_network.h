@@ -13,6 +13,7 @@ bool MoonNet_IsStopped(void);
 uint64_t MoonNet_ServerId(void);
 int MoonNet_GamePort(void);
 int MoonNet_QueryPort(void);
+const char *MoonNet_LoginMode(void);
 unsigned MoonNet_AuthenticatedPeers(void);
 const char *MoonNet_Phase(void);
 

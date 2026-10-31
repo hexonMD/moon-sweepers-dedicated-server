@@ -15,6 +15,7 @@ files = [
 ]
 files += [str(p.relative_to(root)).replace('\\', '/') for p in sorted((root/'native').iterdir())
           if p.is_file() and p.suffix in ('.c', '.h', '.S', '.def')]
+files += [str(p.relative_to(root)).replace('\\', '/') for p in sorted((root/'native/tests').glob('*.c'))]
 files += ['container/server/'+name for name in (
     'entrypoint', 'server-import', 'steam-redist', 'health.py', 'redist-lock.json', 'steam-probe.c')]
 files = sorted(set(files))

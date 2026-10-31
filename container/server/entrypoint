@@ -72,6 +72,9 @@ import re
 password = os.environ.get("MOON_SERVER_PASSWORD", "")
 if not 8 <= len(password) <= 128 or any(not 32 <= ord(character) <= 126 for character in password):
     raise SystemExit("Set MOON_SERVER_PASSWORD to 8-128 printable ASCII characters. Run scripts/server_setup.py or edit .server.env.")
+token = os.environ.get("MOON_STEAM_TOKEN", "")
+if token and (len(token) > 256 or any(not 33 <= ord(character) <= 126 for character in token)):
+    raise SystemExit("MOON_STEAM_TOKEN must be empty or at most 256 non-whitespace ASCII characters.")
 configured_ids = os.environ.get("MOON_ALLOWED_STEAM_IDS", "").strip()
 values = [part.strip() for part in configured_ids.split(",")] if configured_ids else []
 valid = not values or (1 <= len(values) <= 15 and len(values) == len(set(values)))
