@@ -87,7 +87,9 @@ and anonymous server IDs. The initial switch to token login changes the saved ID
 once. Player tickets, join passwords, saves, and the wire protocol stay the same.
 
 See [GSLT setup and NUC verification](SERVER.md#persistent-server-id-with-a-gslt).
-Real token-backed login and restart stability for this app still need NUC testing.
+Real token-backed login, Steam networking authentication, and the same ID across
+two clean container restarts passed in local CPU-only Docker. Deployment on the
+NUC and a live client/password join using the persistent ID still need testing.
 
 ## Connect each Windows player
 

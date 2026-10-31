@@ -40,8 +40,10 @@ nonempty value adds a player filter. Server and clients must use the same releas
 
 Persistent game server IDs use account type 3; anonymous server IDs use type 4.
 The client launcher accepts both. Status includes `steam_login_mode` and
-`steam_account_type` to verify the selected backend. Live token-backed login and
-ID stability across restarts remain a NUC validation step.
+`steam_account_type` to verify the selected backend. Real token-backed login,
+Steam networking authentication, and ID stability across two clean restarts
+passed in local CPU-only Docker. NUC deployment and a live client connection
+using the persistent ID remain validation steps.
 
 The host defaults to save slot 1; `MOON_SLOT` or `-moon-slot` selects 1-5.
 The ordinary game save directory is retained within the persistent Wine prefix.

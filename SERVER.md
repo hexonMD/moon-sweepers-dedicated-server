@@ -185,9 +185,16 @@ Fresh clients can build `native/out/version.dll` with the command in
 ticket/password protocol and server save paths are unchanged.
 
 Token selection and validation are regression-tested, and anonymous operation is
-covered separately. Valid-token login, networking, and two-restart stability for
-App ID 5335510 still require the NUC test; creating a token alone does not prove
-those runtime steps.
+covered separately. A real token for App ID 5335510 reached a fresh ready world
+in local CPU-only Docker, Steam networking authentication succeeded, and the ID
+remained unchanged across two clean container restarts. Confirm those steps on
+the NUC, then test a licensed client's password join with the persistent ID.
+
+The runtime waits for its virtual display to exit on shutdown and removes stale
+local display locks when no display server is answering. This fixes a failure
+where restarting the same container could report `Server is already active for
+display 99`. Clean restarts and recovery from seeded stale display files are
+tested separately from container recreation.
 
 ## 4. Connect the Windows clients
 
